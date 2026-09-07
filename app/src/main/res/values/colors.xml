@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="primary_red">#E53935</color>
+    <color name="dark_red">#B71C1C</color>
+    <color name="light_red">#FFEBEE</color>
+    <color name="pure_white">#FFFFFF</color>
+    <color name="surface_gray">#F8F9FA</color>
+    <color name="text_charcoal">#1E293B</color>
+</resources>
