@@ -76,9 +76,9 @@ dependencies {
     implementation(libs.kotlinx.coroutines.play.services)
 
     // Location & Google Maps Compose
-    implementation(libs.play-services.location)
-    implementation(libs.play-services.maps)
-    implementation(libs.maps-compose)
+    implementation(libs.play.services.location)
+    implementation(libs.play.services.maps)
+    implementation(libs.maps.compose)
 
     // JSON serialization for coordinates in Room
     implementation(libs.gson)
