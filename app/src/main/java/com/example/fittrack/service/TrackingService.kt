@@ -259,25 +259,29 @@ class TrackingService : Service() {
      * Simulation mode allows testing movement & Red Polyline drawing indoors or on an emulator.
      */
     private fun toggleSimulation() {
-        if (isSimulationRunning) {
+        if (_trackingState.value.isSimulating) {
             simulationJob?.cancel()
-            isSimulationRunning = false
+            _trackingState.update { it.copy(isSimulating = false) }
             return
         }
 
-        isSimulationRunning = true
+        if (!_trackingState.value.isTracking) {
+            startForegroundServiceWithTracking()
+        }
+
+        _trackingState.update { it.copy(isSimulating = true) }
+
         simulationJob = serviceScope.launch {
-            // Pick a base location: either last known point, or default to standard coordinates
             var currentLat = _trackingState.value.locationPoints.lastOrNull()?.latitude ?: 28.6139
             var currentLng = _trackingState.value.locationPoints.lastOrNull()?.longitude ?: 77.2090
             var angle = 0.0
 
-            while (isSimulationRunning && _trackingState.value.isTracking && !_trackingState.value.isPaused) {
-                delay(1200L) // New point every 1.2s
-                angle += 0.15
-                // Move ~10-15 meters in a natural jogging curve
-                val deltaLat = 0.00010 * cos(angle)
-                val deltaLng = 0.00012 * sin(angle)
+            while (_trackingState.value.isSimulating && !_trackingState.value.isPaused) {
+                delay(1000L) // 1 second step
+                angle += 0.2
+                // Move ~15-20 meters per step in an athletic route
+                val deltaLat = 0.00015 * cos(angle)
+                val deltaLng = 0.00018 * sin(angle)
                 currentLat += deltaLat
                 currentLng += deltaLng
 
@@ -286,7 +290,7 @@ class TrackingService : Service() {
                     longitude = currentLng,
                     timestamp = System.currentTimeMillis()
                 )
-                appendLocationPoint(simPoint, speedKmh = 10.5f)
+                appendLocationPoint(simPoint, speedKmh = 12.0f)
             }
         }
     }

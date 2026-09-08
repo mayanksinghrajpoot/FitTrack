@@ -4,6 +4,15 @@ plugins {
     alias(libs.plugins.ksp)
 }
 
+// Securely read MAPS_API_KEY from local.properties (never committed to git)
+val localProperties = java.util.Properties().apply {
+    val localFile = rootProject.file("local.properties")
+    if (localFile.exists()) {
+        load(localFile.inputStream())
+    }
+}
+val mapsApiKey = localProperties.getProperty("MAPS_API_KEY") ?: ""
+
 android {
     namespace = "com.example.fittrack"
     compileSdk = 34
@@ -15,7 +24,7 @@ android {
         versionCode = 1
         versionName = "1.0"
 
-        manifestPlaceholders["MAPS_API_KEY"] = "AIzaSyC3T-zbPkHmWbWGo8eXvBVOwpae4f2sexg"
+        manifestPlaceholders["MAPS_API_KEY"] = mapsApiKey
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -75,10 +84,11 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.coroutines.play.services)
 
-    // Location & Google Maps Compose
+    // Location & Maps
     implementation(libs.play.services.location)
     implementation(libs.play.services.maps)
     implementation(libs.maps.compose)
+    implementation(libs.osmdroid.android)
 
     // JSON serialization for coordinates in Room
     implementation(libs.gson)

@@ -14,5 +14,6 @@ class FitTrackApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        org.osmdroid.config.Configuration.getInstance().userAgentValue = packageName
     }
 }

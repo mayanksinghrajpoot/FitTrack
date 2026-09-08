@@ -11,5 +11,6 @@ data class TrackingState(
     val currentSpeedKmh: Float = 0f,
     val averagePaceSecondsPerKm: Long = 0L,
     val caloriesBurned: Int = 0,
+    val isSimulating: Boolean = false,
     val locationPoints: List<LocationPoint> = emptyList()
 )

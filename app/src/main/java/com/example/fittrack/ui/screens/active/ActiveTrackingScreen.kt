@@ -3,6 +3,8 @@ package com.example.fittrack.ui.screens.active
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.graphics.Color as AndroidColor
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -24,9 +26,11 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DirectionsRun
 import androidx.compose.material.icons.filled.Done
 import androidx.compose.material.icons.filled.LocalFireDepartment
+import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -36,10 +40,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -48,6 +55,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import com.example.fittrack.domain.util.TimeUtils
 import com.example.fittrack.ui.theme.CardBorderColor
@@ -68,6 +76,16 @@ import com.google.maps.android.compose.Marker
 import com.google.maps.android.compose.MarkerState
 import com.google.maps.android.compose.Polyline
 import com.google.maps.android.compose.rememberCameraPositionState
+import org.osmdroid.tileprovider.tilesource.TileSourceFactory
+import org.osmdroid.util.GeoPoint
+import org.osmdroid.views.MapView
+import org.osmdroid.views.overlay.Marker as OsmMarker
+import org.osmdroid.views.overlay.Polyline as OsmPolyline
+
+enum class MapEngine {
+    OPEN_STREET_MAP,
+    GOOGLE_MAPS
+}
 
 @Composable
 fun ActiveTrackingScreen(
@@ -77,6 +95,9 @@ fun ActiveTrackingScreen(
 ) {
     val context = LocalContext.current
     val trackingState by viewModel.trackingState.collectAsState()
+
+    // Default to OpenStreetMap so streets & buildings load 100% reliably without any API Key!
+    var selectedMapEngine by remember { mutableStateOf(MapEngine.OPEN_STREET_MAP) }
 
     val hasLocationPermission = remember {
         ContextCompat.checkSelfPermission(
@@ -96,165 +117,138 @@ fun ActiveTrackingScreen(
         trackingState.locationPoints.map { LatLng(it.latitude, it.longitude) }
     }
 
-    val cameraPositionState = rememberCameraPositionState {
-        position = CameraPosition.fromLatLngZoom(
-            latLngPoints.lastOrNull() ?: LatLng(28.6139, 77.2090),
-            17f
-        )
-    }
-
-    // Center camera on actual device location immediately
-    LaunchedEffect(Unit) {
-        try {
-            val fusedClient = LocationServices.getFusedLocationProviderClient(context)
-            fusedClient.lastLocation.addOnSuccessListener { loc ->
-                if (loc != null && latLngPoints.isEmpty()) {
-                    cameraPositionState.position = CameraPosition.fromLatLngZoom(
-                        LatLng(loc.latitude, loc.longitude),
-                        17f
-                    )
-                }
-            }
-        } catch (e: SecurityException) {
-            // Permission missing
-        }
-    }
-
-    // Follow user smoothly as coordinates stream in
-    LaunchedEffect(latLngPoints.lastOrNull()) {
-        latLngPoints.lastOrNull()?.let { lastPoint ->
-            cameraPositionState.animate(
-                CameraUpdateFactory.newLatLng(lastPoint),
-                600
-            )
-        }
+    val geoPoints = remember(trackingState.locationPoints) {
+        trackingState.locationPoints.map { GeoPoint(it.latitude, it.longitude) }
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        // Live Google Map View with dynamic Red Polyline path
-        GoogleMap(
-            modifier = Modifier.fillMaxSize(),
-            cameraPositionState = cameraPositionState,
-            properties = MapProperties(
-                isMyLocationEnabled = hasLocationPermission
-            ),
-            uiSettings = MapUiSettings(
-                zoomControlsEnabled = false,
-                compassEnabled = true,
-                myLocationButtonEnabled = hasLocationPermission
+        if (selectedMapEngine == MapEngine.OPEN_STREET_MAP) {
+            // OpenStreetMap (OSMDroid): Loads streets, roads, and buildings instantly with ZERO API Key!
+            OpenStreetMapRenderer(
+                geoPoints = geoPoints,
+                modifier = Modifier.fillMaxSize()
             )
-        ) {
-            // Draw Athletic Crimson Red Polyline path when 2 or more points exist
-            if (latLngPoints.size >= 2) {
-                Polyline(
-                    points = latLngPoints,
-                    color = MapRouteRed,
-                    width = 16f
-                )
-            }
-
-            // Start Position Marker
-            latLngPoints.firstOrNull()?.let { startPoint ->
-                Marker(
-                    state = MarkerState(position = startPoint),
-                    title = "Start Point",
-                    icon = BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_GREEN)
-                )
-            }
-
-            // Current Position Marker & Pulse Circle
-            latLngPoints.lastOrNull()?.let { currentPoint ->
-                if (latLngPoints.size > 1) {
-                    Marker(
-                        state = MarkerState(position = currentPoint),
-                        title = "Current Position",
-                        icon = BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_RED)
-                    )
-                }
-                Circle(
-                    center = currentPoint,
-                    radius = 8.0, // 8 meters pulse circle
-                    fillColor = CrimsonRed.copy(alpha = 0.35f),
-                    strokeColor = CrimsonRed,
-                    strokeWidth = 3f
-                )
-            }
+        } else {
+            // Google Maps Compose: Available if user configures a working key
+            GoogleMapRenderer(
+                latLngPoints = latLngPoints,
+                hasLocationPermission = hasLocationPermission,
+                modifier = Modifier.fillMaxSize()
+            )
         }
 
-        // Top Controls: Discard / Close Button, Test Walk Simulation Chip & Status Badge
-        Row(
+        // Top Controls: Discard Button, Map Engine Switcher, Simulation Toggle & Live Badge
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(top = 48.dp, start = 16.dp, end = 16.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+                .padding(top = 44.dp, start = 14.dp, end = 14.dp)
         ) {
-            Surface(
-                shape = CircleShape,
-                color = PureWhite,
-                shadowElevation = 4.dp,
-                border = BorderStroke(1.dp, CardBorderColor)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                IconButton(onClick = { viewModel.discardRun(context, onCloseClick) }) {
-                    Icon(
-                        imageVector = Icons.Default.Close,
-                        contentDescription = "Discard Run",
-                        tint = MaterialTheme.colorScheme.onSurface
-                    )
-                }
-            }
-
-            // Simulation Toggle: Tap to test red line drawing indoors or on emulator
-            Surface(
-                shape = RoundedCornerShape(20.dp),
-                color = PureWhite,
-                shadowElevation = 3.dp,
-                border = BorderStroke(1.dp, CrimsonRed.copy(alpha = 0.4f)),
-                modifier = Modifier.clickable {
-                    viewModel.toggleSimulation(context)
-                }
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                // Discard Run Button
+                Surface(
+                    shape = CircleShape,
+                    color = PureWhite,
+                    shadowElevation = 4.dp,
+                    border = BorderStroke(1.dp, CardBorderColor)
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.DirectionsRun,
-                        contentDescription = null,
-                        tint = CrimsonRed,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        text = "Simulate Walk",
-                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                        color = CrimsonRed
-                    )
+                    IconButton(onClick = { viewModel.discardRun(context, onCloseClick) }) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Discard Run",
+                            tint = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
                 }
-            }
 
-            // Live Pulse Badge
-            Surface(
-                shape = RoundedCornerShape(20.dp),
-                color = if (trackingState.isPaused) Color(0xFFFEF3C7) else CrimsonRedLight,
-                border = BorderStroke(1.dp, if (trackingState.isPaused) Color(0xFFF59E0B) else CrimsonRed)
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                // Map Engine Switcher: OSM (Free No-Key) vs Google
+                Surface(
+                    shape = RoundedCornerShape(20.dp),
+                    color = PureWhite,
+                    shadowElevation = 3.dp,
+                    border = BorderStroke(1.dp, CardBorderColor),
+                    modifier = Modifier.clickable {
+                        selectedMapEngine = if (selectedMapEngine == MapEngine.OPEN_STREET_MAP) {
+                            MapEngine.GOOGLE_MAPS
+                        } else {
+                            MapEngine.OPEN_STREET_MAP
+                        }
+                    }
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(8.dp)
-                            .clip(CircleShape)
-                            .background(if (trackingState.isPaused) Color(0xFFF59E0B) else CrimsonRed)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = if (trackingState.isPaused) "PAUSED" else "LIVE",
-                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                        color = if (trackingState.isPaused) Color(0xFFB45309) else CrimsonRed
-                    )
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Map,
+                            contentDescription = null,
+                            tint = CrimsonRed,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = if (selectedMapEngine == MapEngine.OPEN_STREET_MAP) "Map: OSM" else "Map: Google",
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
+
+                // Simulate Walk Button with Live Active State
+                Surface(
+                    shape = RoundedCornerShape(20.dp),
+                    color = if (trackingState.isSimulating) CrimsonRed else PureWhite,
+                    shadowElevation = 4.dp,
+                    border = BorderStroke(1.dp, CrimsonRed),
+                    modifier = Modifier.clickable {
+                        viewModel.toggleSimulation(context)
+                    }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = if (trackingState.isSimulating) Icons.Default.Stop else Icons.Default.DirectionsRun,
+                            contentDescription = null,
+                            tint = if (trackingState.isSimulating) PureWhite else CrimsonRed,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = if (trackingState.isSimulating) "Stop Walk" else "Simulate Walk",
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                            color = if (trackingState.isSimulating) PureWhite else CrimsonRed
+                        )
+                    }
+                }
+
+                // Live Pulse Badge
+                Surface(
+                    shape = RoundedCornerShape(20.dp),
+                    color = if (trackingState.isPaused) Color(0xFFFEF3C7) else CrimsonRedLight,
+                    border = BorderStroke(1.dp, if (trackingState.isPaused) Color(0xFFF59E0B) else CrimsonRed)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(if (trackingState.isPaused) Color(0xFFF59E0B) else CrimsonRed)
+                        )
+                        Spacer(modifier = Modifier.width(5.dp))
+                        Text(
+                            text = if (trackingState.isPaused) "PAUSED" else "LIVE",
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                            color = if (trackingState.isPaused) Color(0xFFB45309) else CrimsonRed
+                        )
+                    }
                 }
             }
         }
@@ -377,6 +371,164 @@ fun ActiveTrackingScreen(
                     }
                 }
             }
+        }
+    }
+}
+
+/**
+ * OpenStreetMap (OSMDroid) Renderer:
+ * Loads real-world streets and renders the Crimson Red Polyline path with 0 API keys.
+ */
+@Composable
+private fun OpenStreetMapRenderer(
+    geoPoints: List<GeoPoint>,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    var mapViewRef by remember { mutableStateOf<MapView?>(null) }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            mapViewRef?.onDetach()
+        }
+    }
+
+    AndroidView(
+        modifier = modifier,
+        factory = { ctx ->
+            MapView(ctx).apply {
+                setTileSource(TileSourceFactory.MAPNIK)
+                setMultiTouchControls(true)
+                isTilesScaledToDpi = true
+                controller.setZoom(17.5)
+
+                val initialCenter = geoPoints.lastOrNull() ?: GeoPoint(28.6139, 77.2090)
+                controller.setCenter(initialCenter)
+                mapViewRef = this
+            }
+        },
+        update = { mapView ->
+            mapView.overlays.clear()
+
+            // Draw Athletic Crimson Red Polyline path
+            if (geoPoints.size >= 2) {
+                val polyline = OsmPolyline().apply {
+                    outlinePaint.color = AndroidColor.parseColor("#E53935")
+                    outlinePaint.strokeWidth = 14f
+                    setPoints(geoPoints)
+                }
+                mapView.overlays.add(polyline)
+            }
+
+            // Start Position Marker
+            geoPoints.firstOrNull()?.let { startPoint ->
+                val startMarker = OsmMarker(mapView).apply {
+                    position = startPoint
+                    title = "Start Point"
+                    setAnchor(OsmMarker.ANCHOR_CENTER, OsmMarker.ANCHOR_BOTTOM)
+                }
+                mapView.overlays.add(startMarker)
+            }
+
+            // Current Position Marker
+            geoPoints.lastOrNull()?.let { currentPoint ->
+                val currentMarker = OsmMarker(mapView).apply {
+                    position = currentPoint
+                    title = "Current Position"
+                    setAnchor(OsmMarker.ANCHOR_CENTER, OsmMarker.ANCHOR_BOTTOM)
+                }
+                mapView.overlays.add(currentMarker)
+
+                // Smoothly center on latest coordinate
+                mapView.controller.animateTo(currentPoint)
+            }
+
+            mapView.invalidate()
+        }
+    )
+}
+
+/**
+ * Google Maps Compose Renderer
+ */
+@Composable
+private fun GoogleMapRenderer(
+    latLngPoints: List<LatLng>,
+    hasLocationPermission: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val cameraPositionState = rememberCameraPositionState {
+        position = CameraPosition.fromLatLngZoom(
+            latLngPoints.lastOrNull() ?: LatLng(28.6139, 77.2090),
+            17f
+        )
+    }
+
+    LaunchedEffect(Unit) {
+        try {
+            val fusedClient = LocationServices.getFusedLocationProviderClient(context)
+            fusedClient.lastLocation.addOnSuccessListener { loc ->
+                if (loc != null && latLngPoints.isEmpty()) {
+                    cameraPositionState.position = CameraPosition.fromLatLngZoom(
+                        LatLng(loc.latitude, loc.longitude),
+                        17f
+                    )
+                }
+            }
+        } catch (e: SecurityException) {}
+    }
+
+    LaunchedEffect(latLngPoints.lastOrNull()) {
+        latLngPoints.lastOrNull()?.let { lastPoint ->
+            cameraPositionState.animate(
+                CameraUpdateFactory.newLatLng(lastPoint),
+                600
+            )
+        }
+    }
+
+    GoogleMap(
+        modifier = modifier,
+        cameraPositionState = cameraPositionState,
+        properties = MapProperties(isMyLocationEnabled = hasLocationPermission),
+        uiSettings = MapUiSettings(
+            zoomControlsEnabled = false,
+            compassEnabled = true,
+            myLocationButtonEnabled = hasLocationPermission
+        )
+    ) {
+        if (latLngPoints.size >= 2) {
+            Polyline(
+                points = latLngPoints,
+                color = MapRouteRed,
+                width = 16f
+            )
+        }
+
+        latLngPoints.firstOrNull()?.let { startPoint ->
+            Marker(
+                state = MarkerState(position = startPoint),
+                title = "Start Point",
+                icon = BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_GREEN)
+            )
+        }
+
+        latLngPoints.lastOrNull()?.let { currentPoint ->
+            if (latLngPoints.size > 1) {
+                Marker(
+                    state = MarkerState(position = currentPoint),
+                    title = "Current Position",
+                    icon = BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_RED)
+                )
+            }
+            Circle(
+                center = currentPoint,
+                radius = 8.0,
+                fillColor = CrimsonRed.copy(alpha = 0.35f),
+                strokeColor = CrimsonRed,
+                strokeWidth = 3f
+            )
         }
     }
 }
