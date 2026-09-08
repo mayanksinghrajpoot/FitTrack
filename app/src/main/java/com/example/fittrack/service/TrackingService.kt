@@ -33,15 +33,20 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlin.math.cos
+import kotlin.math.sin
 
 /**
  * Foreground Service that handles continuous GPS tracking and time recording.
- * Maintains an active notification and emits real-time updates via StateFlow.
+ * Maintains an active notification, fetches immediate location fixes,
+ * and supports test movement simulation for indoor/emulator verification.
  */
 class TrackingService : Service() {
 
     private val serviceScope = CoroutineScope(Dispatchers.Default + Job())
     private var timerJob: Job? = null
+    private var simulationJob: Job? = null
+    private var isSimulationRunning = false
 
     private lateinit var fusedLocationClient: FusedLocationProviderClient
     private lateinit var locationCallback: LocationCallback
@@ -51,6 +56,7 @@ class TrackingService : Service() {
         const val ACTION_START_OR_RESUME = "ACTION_START_OR_RESUME"
         const val ACTION_PAUSE = "ACTION_PAUSE"
         const val ACTION_STOP = "ACTION_STOP"
+        const val ACTION_TOGGLE_SIMULATION = "ACTION_TOGGLE_SIMULATION"
 
         const val NOTIFICATION_CHANNEL_ID = "fittrack_tracking_channel"
         const val NOTIFICATION_ID = 1001
@@ -86,17 +92,18 @@ class TrackingService : Service() {
             ACTION_STOP -> {
                 stopTrackingService()
             }
+            ACTION_TOGGLE_SIMULATION -> {
+                toggleSimulation()
+            }
         }
         return START_STICKY
     }
 
     private fun startForegroundServiceWithTracking() {
-        val wasPaused = _trackingState.value.isPaused
         _trackingState.update {
             it.copy(isTracking = true, isPaused = false)
         }
 
-        // Start Foreground Service with notification
         val notification = buildNotification("Starting run...")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(
@@ -108,7 +115,6 @@ class TrackingService : Service() {
             startForeground(NOTIFICATION_ID, notification)
         }
 
-        // Start location updates and timer
         startLocationUpdates()
         startTimer()
     }
@@ -117,6 +123,8 @@ class TrackingService : Service() {
         _trackingState.update { it.copy(isPaused = true) }
         stopLocationUpdates()
         timerJob?.cancel()
+        simulationJob?.cancel()
+        isSimulationRunning = false
 
         val notification = buildNotification("Run paused")
         notificationManager.notify(NOTIFICATION_ID, notification)
@@ -126,6 +134,8 @@ class TrackingService : Service() {
         _trackingState.update { it.copy(isTracking = false, isPaused = false) }
         stopLocationUpdates()
         timerJob?.cancel()
+        simulationJob?.cancel()
+        isSimulationRunning = false
 
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
@@ -147,7 +157,6 @@ class TrackingService : Service() {
                     )
                 }
 
-                // Update notification every few seconds
                 if ((_trackingState.value.durationMillis / 1000L) % 3L == 0L) {
                     val state = _trackingState.value
                     val distKm = String.format("%.2f km", state.distanceMeters / 1000f)
@@ -161,12 +170,33 @@ class TrackingService : Service() {
 
     @SuppressLint("MissingPermission")
     private fun startLocationUpdates() {
+        // Fetch last known location immediately so we don't wait on first GPS fix
+        try {
+            fusedLocationClient.lastLocation.addOnSuccessListener { location ->
+                if (location != null && _trackingState.value.locationPoints.isEmpty()) {
+                    appendLocationPoint(
+                        LocationPoint(
+                            latitude = location.latitude,
+                            longitude = location.longitude,
+                            altitude = location.altitude,
+                            timestamp = location.time
+                        ),
+                        speedKmh = location.speed * 3.6f
+                    )
+                }
+            }
+        } catch (e: SecurityException) {
+            // Permission missing
+        }
+
+        // Location request configured to capture updates every 2 seconds without a distance filter
         val locationRequest = LocationRequest.Builder(
             Priority.PRIORITY_HIGH_ACCURACY,
-            3000L // update interval: 3 seconds
+            2000L // 2 seconds
         ).apply {
-            setMinUpdateIntervalMillis(2000L)
-            setMinUpdateDistanceMeters(2f) // update every 2 meters
+            setMinUpdateIntervalMillis(1000L)
+            setMinUpdateDistanceMeters(0f) // Capture every GPS change even small steps
+            setWaitForAccurateLocation(false)
         }.build()
 
         try {
@@ -176,7 +206,7 @@ class TrackingService : Service() {
                 Looper.getMainLooper()
             )
         } catch (e: SecurityException) {
-            // Handled in UI permissions
+            // Permission missing
         }
     }
 
@@ -191,29 +221,72 @@ class TrackingService : Service() {
                 if (!_trackingState.value.isTracking || _trackingState.value.isPaused) return
 
                 result.locations.forEach { location ->
-                    val newPoint = LocationPoint(
-                        latitude = location.latitude,
-                        longitude = location.longitude,
-                        altitude = location.altitude,
-                        timestamp = location.time
+                    appendLocationPoint(
+                        LocationPoint(
+                            latitude = location.latitude,
+                            longitude = location.longitude,
+                            altitude = location.altitude,
+                            timestamp = location.time
+                        ),
+                        speedKmh = location.speed * 3.6f
                     )
-
-                    _trackingState.update { current ->
-                        val updatedList = current.locationPoints + newPoint
-                        val totalDistance = LocationUtils.calculateTotalDistance(updatedList)
-                        val speedKmh = location.speed * 3.6f // m/s to km/h
-                        val avgPace = LocationUtils.calculateAveragePace(current.durationMillis, totalDistance)
-                        val calories = LocationUtils.calculateCaloriesBurned(totalDistance, current.durationMillis)
-
-                        current.copy(
-                            distanceMeters = totalDistance,
-                            currentSpeedKmh = speedKmh,
-                            averagePaceSecondsPerKm = avgPace,
-                            caloriesBurned = calories,
-                            locationPoints = updatedList
-                        )
-                    }
                 }
+            }
+        }
+    }
+
+    /**
+     * Common helper to add a coordinate point and recalculate workout metrics.
+     */
+    private fun appendLocationPoint(newPoint: LocationPoint, speedKmh: Float) {
+        _trackingState.update { current ->
+            val updatedList = current.locationPoints + newPoint
+            val totalDistance = LocationUtils.calculateTotalDistance(updatedList)
+            val avgPace = LocationUtils.calculateAveragePace(current.durationMillis, totalDistance)
+            val calories = LocationUtils.calculateCaloriesBurned(totalDistance, current.durationMillis)
+
+            current.copy(
+                distanceMeters = totalDistance,
+                currentSpeedKmh = speedKmh,
+                averagePaceSecondsPerKm = avgPace,
+                caloriesBurned = calories,
+                locationPoints = updatedList
+            )
+        }
+    }
+
+    /**
+     * Simulation mode allows testing movement & Red Polyline drawing indoors or on an emulator.
+     */
+    private fun toggleSimulation() {
+        if (isSimulationRunning) {
+            simulationJob?.cancel()
+            isSimulationRunning = false
+            return
+        }
+
+        isSimulationRunning = true
+        simulationJob = serviceScope.launch {
+            // Pick a base location: either last known point, or default to standard coordinates
+            var currentLat = _trackingState.value.locationPoints.lastOrNull()?.latitude ?: 28.6139
+            var currentLng = _trackingState.value.locationPoints.lastOrNull()?.longitude ?: 77.2090
+            var angle = 0.0
+
+            while (isSimulationRunning && _trackingState.value.isTracking && !_trackingState.value.isPaused) {
+                delay(1200L) // New point every 1.2s
+                angle += 0.15
+                // Move ~10-15 meters in a natural jogging curve
+                val deltaLat = 0.00010 * cos(angle)
+                val deltaLng = 0.00012 * sin(angle)
+                currentLat += deltaLat
+                currentLng += deltaLng
+
+                val simPoint = LocationPoint(
+                    latitude = currentLat,
+                    longitude = currentLng,
+                    timestamp = System.currentTimeMillis()
+                )
+                appendLocationPoint(simPoint, speedKmh = 10.5f)
             }
         }
     }
@@ -257,6 +330,7 @@ class TrackingService : Service() {
         super.onDestroy()
         stopLocationUpdates()
         timerJob?.cancel()
+        simulationJob?.cancel()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null

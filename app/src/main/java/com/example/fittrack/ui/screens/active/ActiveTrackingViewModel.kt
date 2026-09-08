@@ -2,6 +2,7 @@ package com.example.fittrack.ui.screens.active
 
 import android.content.Context
 import android.content.Intent
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -24,7 +25,7 @@ class ActiveTrackingViewModel(private val repository: RunRepository) : ViewModel
         val intent = Intent(context, TrackingService::class.java).apply {
             action = TrackingService.ACTION_START_OR_RESUME
         }
-        context.startService(intent)
+        ContextCompat.startForegroundService(context, intent)
     }
 
     fun pauseTracking(context: Context) {
@@ -34,11 +35,18 @@ class ActiveTrackingViewModel(private val repository: RunRepository) : ViewModel
         context.startService(intent)
     }
 
+    fun toggleSimulation(context: Context) {
+        val intent = Intent(context, TrackingService::class.java).apply {
+            action = TrackingService.ACTION_TOGGLE_SIMULATION
+        }
+        context.startService(intent)
+    }
+
     fun finishAndSaveRun(context: Context, onSaved: () -> Unit) {
         val currentState = trackingState.value
 
-        // Only save if some movement or duration was recorded
-        if (currentState.durationMillis > 2000L || currentState.distanceMeters > 5f) {
+        // Save if any movement or duration recorded
+        if (currentState.durationMillis > 2000L || currentState.distanceMeters > 2f) {
             val runEntity = RunEntity(
                 timestamp = System.currentTimeMillis(),
                 durationMillis = currentState.durationMillis,

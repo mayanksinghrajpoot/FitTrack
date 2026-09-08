@@ -15,7 +15,7 @@ android {
         versionCode = 1
         versionName = "1.0"
 
-        manifestPlaceholders["MAPS_API_KEY"] = "YOUR_GOOGLE_MAPS_API_KEY"
+        manifestPlaceholders["MAPS_API_KEY"] = "AIzaSyC3T-zbPkHmWbWGo8eXvBVOwpae4f2sexg"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {

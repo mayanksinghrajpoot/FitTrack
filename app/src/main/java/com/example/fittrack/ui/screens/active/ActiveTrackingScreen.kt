@@ -1,8 +1,11 @@
 package com.example.fittrack.ui.screens.active
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,6 +21,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DirectionsRun
 import androidx.compose.material.icons.filled.Done
 import androidx.compose.material.icons.filled.LocalFireDepartment
 import androidx.compose.material.icons.filled.Pause
@@ -44,16 +48,19 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import com.example.fittrack.domain.util.TimeUtils
 import com.example.fittrack.ui.theme.CardBorderColor
 import com.example.fittrack.ui.theme.CrimsonRed
 import com.example.fittrack.ui.theme.CrimsonRedLight
 import com.example.fittrack.ui.theme.MapRouteRed
-import com.example.fittrack.ui.theme.MapStartGreen
 import com.example.fittrack.ui.theme.PureWhite
+import com.google.android.gms.location.LocationServices
 import com.google.android.gms.maps.CameraUpdateFactory
+import com.google.android.gms.maps.model.BitmapDescriptorFactory
 import com.google.android.gms.maps.model.CameraPosition
 import com.google.android.gms.maps.model.LatLng
+import com.google.maps.android.compose.Circle
 import com.google.maps.android.compose.GoogleMap
 import com.google.maps.android.compose.MapProperties
 import com.google.maps.android.compose.MapUiSettings
@@ -71,6 +78,13 @@ fun ActiveTrackingScreen(
     val context = LocalContext.current
     val trackingState by viewModel.trackingState.collectAsState()
 
+    val hasLocationPermission = remember {
+        ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.ACCESS_FINE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED
+    }
+
     // Start tracking when screen launches if not already running
     LaunchedEffect(Unit) {
         if (!trackingState.isTracking) {
@@ -84,17 +98,34 @@ fun ActiveTrackingScreen(
 
     val cameraPositionState = rememberCameraPositionState {
         position = CameraPosition.fromLatLngZoom(
-            latLngPoints.lastOrNull() ?: LatLng(28.6139, 77.2090), // Default center
-            16f
+            latLngPoints.lastOrNull() ?: LatLng(28.6139, 77.2090),
+            17f
         )
     }
 
-    // Follow user location smoothly as coordinates stream in
+    // Center camera on actual device location immediately
+    LaunchedEffect(Unit) {
+        try {
+            val fusedClient = LocationServices.getFusedLocationProviderClient(context)
+            fusedClient.lastLocation.addOnSuccessListener { loc ->
+                if (loc != null && latLngPoints.isEmpty()) {
+                    cameraPositionState.position = CameraPosition.fromLatLngZoom(
+                        LatLng(loc.latitude, loc.longitude),
+                        17f
+                    )
+                }
+            }
+        } catch (e: SecurityException) {
+            // Permission missing
+        }
+    }
+
+    // Follow user smoothly as coordinates stream in
     LaunchedEffect(latLngPoints.lastOrNull()) {
         latLngPoints.lastOrNull()?.let { lastPoint ->
             cameraPositionState.animate(
                 CameraUpdateFactory.newLatLng(lastPoint),
-                500
+                600
             )
         }
     }
@@ -104,19 +135,21 @@ fun ActiveTrackingScreen(
         GoogleMap(
             modifier = Modifier.fillMaxSize(),
             cameraPositionState = cameraPositionState,
-            properties = MapProperties(isMyLocationEnabled = true),
+            properties = MapProperties(
+                isMyLocationEnabled = hasLocationPermission
+            ),
             uiSettings = MapUiSettings(
                 zoomControlsEnabled = false,
                 compassEnabled = true,
-                myLocationButtonEnabled = true
+                myLocationButtonEnabled = hasLocationPermission
             )
         ) {
-            // Draw Athletic Crimson Red Polyline path
+            // Draw Athletic Crimson Red Polyline path when 2 or more points exist
             if (latLngPoints.size >= 2) {
                 Polyline(
                     points = latLngPoints,
                     color = MapRouteRed,
-                    width = 14f
+                    width = 16f
                 )
             }
 
@@ -124,12 +157,31 @@ fun ActiveTrackingScreen(
             latLngPoints.firstOrNull()?.let { startPoint ->
                 Marker(
                     state = MarkerState(position = startPoint),
-                    title = "Start Point"
+                    title = "Start Point",
+                    icon = BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_GREEN)
+                )
+            }
+
+            // Current Position Marker & Pulse Circle
+            latLngPoints.lastOrNull()?.let { currentPoint ->
+                if (latLngPoints.size > 1) {
+                    Marker(
+                        state = MarkerState(position = currentPoint),
+                        title = "Current Position",
+                        icon = BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_RED)
+                    )
+                }
+                Circle(
+                    center = currentPoint,
+                    radius = 8.0, // 8 meters pulse circle
+                    fillColor = CrimsonRed.copy(alpha = 0.35f),
+                    strokeColor = CrimsonRed,
+                    strokeWidth = 3f
                 )
             }
         }
 
-        // Top Controls: Discard / Close Button & Live Status Badge
+        // Top Controls: Discard / Close Button, Test Walk Simulation Chip & Status Badge
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -152,6 +204,35 @@ fun ActiveTrackingScreen(
                 }
             }
 
+            // Simulation Toggle: Tap to test red line drawing indoors or on emulator
+            Surface(
+                shape = RoundedCornerShape(20.dp),
+                color = PureWhite,
+                shadowElevation = 3.dp,
+                border = BorderStroke(1.dp, CrimsonRed.copy(alpha = 0.4f)),
+                modifier = Modifier.clickable {
+                    viewModel.toggleSimulation(context)
+                }
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.DirectionsRun,
+                        contentDescription = null,
+                        tint = CrimsonRed,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "Simulate Walk",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                        color = CrimsonRed
+                    )
+                }
+            }
+
             // Live Pulse Badge
             Surface(
                 shape = RoundedCornerShape(20.dp),
@@ -159,7 +240,7 @@ fun ActiveTrackingScreen(
                 border = BorderStroke(1.dp, if (trackingState.isPaused) Color(0xFFF59E0B) else CrimsonRed)
             ) {
                 Row(
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Box(
@@ -170,7 +251,7 @@ fun ActiveTrackingScreen(
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = if (trackingState.isPaused) "PAUSED" else "LIVE TRACKING",
+                        text = if (trackingState.isPaused) "PAUSED" else "LIVE",
                         style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
                         color = if (trackingState.isPaused) Color(0xFFB45309) else CrimsonRed
                     )
