@@ -15,13 +15,18 @@ class FitTrackApp : Application() {
     override fun onCreate() {
         super.onCreate()
 
-        // OSMDroid MUST be configured with load() before any MapView is instantiated.
-        // Without load(), tile providers ignore userAgentValue and show blank grid tiles.
+        // OSMDroid Configuration: must call load() before any MapView is created.
         val prefs = getSharedPreferences("osmdroid_prefs", MODE_PRIVATE)
         val osmConfig = org.osmdroid.config.Configuration.getInstance()
         osmConfig.load(this, prefs)
         osmConfig.userAgentValue = "FitTrack-AthleticTracker/1.0"
-        osmConfig.osmdroidBasePath = java.io.File(filesDir, "osm_base_v3")
-        osmConfig.osmdroidTileCache = java.io.File(cacheDir, "osm_tiles_v3")
+        osmConfig.osmdroidBasePath = java.io.File(filesDir, "osm_base_v4")
+        osmConfig.osmdroidTileCache = java.io.File(cacheDir, "carto_tiles_v1")
+
+        // Clean up old blocked tile caches from previous OSM tile server attempts
+        listOf("osm_tiles_v2", "osm_tiles_v3", "osm_base", "osm_base_v3").forEach { oldDir ->
+            java.io.File(cacheDir, oldDir).deleteRecursively()
+            java.io.File(filesDir, oldDir).deleteRecursively()
+        }
     }
 }

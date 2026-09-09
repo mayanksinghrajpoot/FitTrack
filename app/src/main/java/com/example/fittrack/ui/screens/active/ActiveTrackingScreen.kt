@@ -75,7 +75,8 @@ import com.google.maps.android.compose.Marker
 import com.google.maps.android.compose.MarkerState
 import com.google.maps.android.compose.Polyline
 import com.google.maps.android.compose.rememberCameraPositionState
-import org.osmdroid.tileprovider.tilesource.TileSourceFactory
+import org.osmdroid.tileprovider.tilesource.OnlineTileSourceBase
+import org.osmdroid.util.MapTileIndex
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.Marker as OsmMarker
@@ -409,8 +410,8 @@ fun ActiveTrackingScreen(
 
 /**
  * OpenStreetMap (OSMDroid) Renderer:
- * Crash-safe implementation that avoids ConcurrentModificationException
- * by using a stable overlay list and proper lifecycle management.
+ * Uses Carto CDN tiles instead of tile.openstreetmap.org (which blocks com.example.* apps).
+ * Carto Voyager tiles are free, fast, and render beautiful street-level detail.
  */
 @Composable
 private fun OpenStreetMapRenderer(
@@ -419,18 +420,47 @@ private fun OpenStreetMapRenderer(
 ) {
     val context = LocalContext.current
 
+    // Carto Voyager tile source: free CDN with no User-Agent blocking
+    val cartoTileSource = remember {
+        object : OnlineTileSourceBase(
+            "CartoDB_Voyager",
+            0, 20, 256, ".png",
+            arrayOf(
+                "https://a.basemaps.cartocdn.com/rastertiles/voyager/",
+                "https://b.basemaps.cartocdn.com/rastertiles/voyager/",
+                "https://c.basemaps.cartocdn.com/rastertiles/voyager/",
+                "https://d.basemaps.cartocdn.com/rastertiles/voyager/"
+            )
+        ) {
+            override fun getTileURLString(pMapTileIndex: Long): String {
+                val zoom = MapTileIndex.getZoom(pMapTileIndex)
+                val x = MapTileIndex.getX(pMapTileIndex)
+                val y = MapTileIndex.getY(pMapTileIndex)
+                return "${getBaseUrl()}$zoom/$x/$y$mImageFilenameEnding"
+            }
+        }
+    }
+
     // Remember a single MapView instance across recompositions
     val mapView = remember {
-        // Ensure OSM config is loaded before MapView creation
+        // Configure OSMDroid before MapView creation
         val prefs = context.getSharedPreferences("osmdroid_prefs", Context.MODE_PRIVATE)
         val osmConfig = org.osmdroid.config.Configuration.getInstance()
         osmConfig.load(context, prefs)
         osmConfig.userAgentValue = "FitTrack-AthleticTracker/1.0"
-        osmConfig.osmdroidBasePath = java.io.File(context.filesDir, "osm_base_v3")
-        osmConfig.osmdroidTileCache = java.io.File(context.cacheDir, "osm_tiles_v3")
+
+        // Use a fresh tile cache to avoid stale 403 tiles from previous tile servers
+        val tileCache = java.io.File(context.cacheDir, "carto_tiles_v1")
+        osmConfig.osmdroidBasePath = java.io.File(context.filesDir, "osm_base_v4")
+        osmConfig.osmdroidTileCache = tileCache
+
+        // Delete old blocked tile caches from previous versions
+        listOf("osm_tiles_v2", "osm_tiles_v3").forEach { oldDir ->
+            java.io.File(context.cacheDir, oldDir).deleteRecursively()
+        }
 
         MapView(context).apply {
-            setTileSource(TileSourceFactory.MAPNIK)
+            setTileSource(cartoTileSource)
             setMultiTouchControls(true)
             isTilesScaledToDpi = true
             controller.setZoom(17.5)
@@ -451,7 +481,6 @@ private fun OpenStreetMapRenderer(
     // Update overlays safely whenever geoPoints change
     LaunchedEffect(geoPoints.size) {
         try {
-            // Build new overlay list FIRST, then swap atomically
             val newOverlays = mutableListOf<org.osmdroid.views.overlay.Overlay>()
 
             if (geoPoints.size >= 2) {
@@ -461,7 +490,7 @@ private fun OpenStreetMapRenderer(
                     outlinePaint.isAntiAlias = true
                     outlinePaint.strokeCap = android.graphics.Paint.Cap.ROUND
                     outlinePaint.strokeJoin = android.graphics.Paint.Join.ROUND
-                    setPoints(geoPoints.toList()) // defensive copy
+                    setPoints(geoPoints.toList())
                 }
                 newOverlays.add(polyline)
             }
@@ -485,12 +514,11 @@ private fun OpenStreetMapRenderer(
                 mapView.controller.animateTo(currentPoint)
             }
 
-            // Atomic swap: clear and addAll in one synchronized block
             mapView.overlays.clear()
             mapView.overlays.addAll(newOverlays)
             mapView.invalidate()
         } catch (_: Exception) {
-            // Swallow ConcurrentModificationException during rapid updates
+            // Safety net for ConcurrentModificationException during rapid simulation updates
         }
     }
 
