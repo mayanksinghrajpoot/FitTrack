@@ -61,8 +61,14 @@ class TrackingService : Service() {
         const val NOTIFICATION_CHANNEL_ID = "fittrack_tracking_channel"
         const val NOTIFICATION_ID = 1001
 
+        var serviceInstance: TrackingService? = null
+
         private val _trackingState = MutableStateFlow(TrackingState())
         val trackingState: StateFlow<TrackingState> = _trackingState.asStateFlow()
+
+        fun toggleSimulationDirectly() {
+            serviceInstance?.toggleSimulation()
+        }
 
         /**
          * Clears tracking state when a run is saved or discarded.
@@ -74,6 +80,7 @@ class TrackingService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        serviceInstance = this
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
         notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
@@ -183,6 +190,21 @@ class TrackingService : Service() {
                         ),
                         speedKmh = location.speed * 3.6f
                     )
+                } else if (location == null && _trackingState.value.locationPoints.isEmpty()) {
+                    fusedLocationClient.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null)
+                        .addOnSuccessListener { curLoc ->
+                            if (curLoc != null && _trackingState.value.locationPoints.isEmpty()) {
+                                appendLocationPoint(
+                                    LocationPoint(
+                                        latitude = curLoc.latitude,
+                                        longitude = curLoc.longitude,
+                                        altitude = curLoc.altitude,
+                                        timestamp = curLoc.time
+                                    ),
+                                    speedKmh = curLoc.speed * 3.6f
+                                )
+                            }
+                        }
                 }
             }
         } catch (e: SecurityException) {
@@ -258,7 +280,7 @@ class TrackingService : Service() {
     /**
      * Simulation mode allows testing movement & Red Polyline drawing indoors or on an emulator.
      */
-    private fun toggleSimulation() {
+    fun toggleSimulation() {
         if (_trackingState.value.isSimulating) {
             simulationJob?.cancel()
             _trackingState.update { it.copy(isSimulating = false) }
@@ -271,17 +293,27 @@ class TrackingService : Service() {
 
         _trackingState.update { it.copy(isSimulating = true) }
 
-        simulationJob = serviceScope.launch {
-            var currentLat = _trackingState.value.locationPoints.lastOrNull()?.latitude ?: 28.6139
-            var currentLng = _trackingState.value.locationPoints.lastOrNull()?.longitude ?: 77.2090
-            var angle = 0.0
+        var currentLat = _trackingState.value.locationPoints.lastOrNull()?.latitude ?: 28.6139
+        var currentLng = _trackingState.value.locationPoints.lastOrNull()?.longitude ?: 77.2090
 
+        // Immediately inject initial points so polyline, distance, and pace appear in 0ms!
+        if (_trackingState.value.locationPoints.size < 2) {
+            val p1 = LocationPoint(latitude = currentLat, longitude = currentLng)
+            val p2 = LocationPoint(latitude = currentLat + 0.00014, longitude = currentLng + 0.00018)
+            appendLocationPoint(p1, speedKmh = 10.0f)
+            appendLocationPoint(p2, speedKmh = 11.5f)
+            currentLat += 0.00014
+            currentLng += 0.00018
+        }
+
+        simulationJob?.cancel()
+        simulationJob = serviceScope.launch {
+            var angle = 0.0
             while (_trackingState.value.isSimulating && !_trackingState.value.isPaused) {
                 delay(1000L) // 1 second step
                 angle += 0.2
-                // Move ~15-20 meters per step in an athletic route
-                val deltaLat = 0.00015 * cos(angle)
-                val deltaLng = 0.00018 * sin(angle)
+                val deltaLat = 0.00014 * cos(angle)
+                val deltaLng = 0.00016 * sin(angle)
                 currentLat += deltaLat
                 currentLng += deltaLng
 
@@ -290,7 +322,7 @@ class TrackingService : Service() {
                     longitude = currentLng,
                     timestamp = System.currentTimeMillis()
                 )
-                appendLocationPoint(simPoint, speedKmh = 12.0f)
+                appendLocationPoint(simPoint, speedKmh = 11.8f)
             }
         }
     }
@@ -332,6 +364,7 @@ class TrackingService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        serviceInstance = null
         stopLocationUpdates()
         timerJob?.cancel()
         simulationJob?.cancel()

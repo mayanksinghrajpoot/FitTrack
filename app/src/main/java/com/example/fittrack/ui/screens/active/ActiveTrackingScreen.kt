@@ -166,17 +166,17 @@ fun ActiveTrackingScreen(
 
                 // Map Engine Switcher: OSM (Free No-Key) vs Google
                 Surface(
-                    shape = RoundedCornerShape(20.dp),
-                    color = PureWhite,
-                    shadowElevation = 3.dp,
-                    border = BorderStroke(1.dp, CardBorderColor),
-                    modifier = Modifier.clickable {
+                    onClick = {
                         selectedMapEngine = if (selectedMapEngine == MapEngine.OPEN_STREET_MAP) {
                             MapEngine.GOOGLE_MAPS
                         } else {
                             MapEngine.OPEN_STREET_MAP
                         }
-                    }
+                    },
+                    shape = RoundedCornerShape(20.dp),
+                    color = PureWhite,
+                    shadowElevation = 3.dp,
+                    border = BorderStroke(1.dp, CardBorderColor)
                 ) {
                     Row(
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
@@ -199,13 +199,13 @@ fun ActiveTrackingScreen(
 
                 // Simulate Walk Button with Live Active State
                 Surface(
+                    onClick = {
+                        viewModel.toggleSimulation(context)
+                    },
                     shape = RoundedCornerShape(20.dp),
                     color = if (trackingState.isSimulating) CrimsonRed else PureWhite,
                     shadowElevation = 4.dp,
-                    border = BorderStroke(1.dp, CrimsonRed),
-                    modifier = Modifier.clickable {
-                        viewModel.toggleSimulation(context)
-                    }
+                    border = BorderStroke(1.dp, CrimsonRed)
                 ) {
                     Row(
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
@@ -247,6 +247,41 @@ fun ActiveTrackingScreen(
                             text = if (trackingState.isPaused) "PAUSED" else "LIVE",
                             style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
                             color = if (trackingState.isPaused) Color(0xFFB45309) else CrimsonRed
+                        )
+                    }
+                }
+            }
+
+            // Indoor GPS notice banner when awaiting satellite fix
+            AnimatedVisibility(
+                visible = trackingState.locationPoints.size < 2 && !trackingState.isSimulating,
+                modifier = Modifier.padding(top = 10.dp)
+            ) {
+                Surface(
+                    onClick = { viewModel.toggleSimulation(context) },
+                    shape = RoundedCornerShape(12.dp),
+                    color = PureWhite,
+                    shadowElevation = 4.dp,
+                    border = BorderStroke(1.dp, CrimsonRed.copy(alpha = 0.35f))
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.DirectionsRun,
+                            contentDescription = null,
+                            tint = CrimsonRed,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Indoor testing? Tap here to simulate walk & draw route!",
+                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                            color = CrimsonRed,
+                            modifier = Modifier.weight(1f)
                         )
                     }
                 }
@@ -386,9 +421,11 @@ private fun OpenStreetMapRenderer(
 ) {
     val context = LocalContext.current
     var mapViewRef by remember { mutableStateOf<MapView?>(null) }
+    var lastAnimatedPoint by remember { mutableStateOf<GeoPoint?>(null) }
 
-    DisposableEffect(Unit) {
+    DisposableEffect(mapViewRef) {
         onDispose {
+            mapViewRef?.onPause()
             mapViewRef?.onDetach()
         }
     }
@@ -396,6 +433,12 @@ private fun OpenStreetMapRenderer(
     AndroidView(
         modifier = modifier,
         factory = { ctx ->
+            // Configure OSM settings before MapView initialization
+            val osmConfig = org.osmdroid.config.Configuration.getInstance()
+            osmConfig.userAgentValue = "FitTrack-AthleticTracker-Release-1.0"
+            osmConfig.osmdroidBasePath = java.io.File(ctx.filesDir, "osm_base")
+            osmConfig.osmdroidTileCache = java.io.File(ctx.cacheDir, "osm_tiles_v2")
+
             MapView(ctx).apply {
                 setTileSource(TileSourceFactory.MAPNIK)
                 setMultiTouchControls(true)
@@ -404,6 +447,7 @@ private fun OpenStreetMapRenderer(
 
                 val initialCenter = geoPoints.lastOrNull() ?: GeoPoint(28.6139, 77.2090)
                 controller.setCenter(initialCenter)
+                onResume() // Activate tile provider threads
                 mapViewRef = this
             }
         },
@@ -439,8 +483,11 @@ private fun OpenStreetMapRenderer(
                 }
                 mapView.overlays.add(currentMarker)
 
-                // Smoothly center on latest coordinate
-                mapView.controller.animateTo(currentPoint)
+                // Smoothly center on latest coordinate only when it actually changes
+                if (currentPoint != lastAnimatedPoint) {
+                    lastAnimatedPoint = currentPoint
+                    mapView.controller.animateTo(currentPoint)
+                }
             }
 
             mapView.invalidate()

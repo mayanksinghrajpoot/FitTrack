@@ -14,6 +14,10 @@ class FitTrackApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
-        org.osmdroid.config.Configuration.getInstance().userAgentValue = packageName
+        // Use a unique, compliant User-Agent so OpenStreetMap servers do not block requests (com.example is blocked by OSM policy)
+        val osmConfig = org.osmdroid.config.Configuration.getInstance()
+        osmConfig.userAgentValue = "FitTrack-AthleticTracker-Release-1.0"
+        osmConfig.osmdroidBasePath = java.io.File(filesDir, "osm_base")
+        osmConfig.osmdroidTileCache = java.io.File(cacheDir, "osm_tiles_v2")
     }
 }

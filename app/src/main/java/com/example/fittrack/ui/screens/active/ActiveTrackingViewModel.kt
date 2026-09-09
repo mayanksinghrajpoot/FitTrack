@@ -36,10 +36,14 @@ class ActiveTrackingViewModel(private val repository: RunRepository) : ViewModel
     }
 
     fun toggleSimulation(context: Context) {
-        val intent = Intent(context, TrackingService::class.java).apply {
-            action = TrackingService.ACTION_TOGGLE_SIMULATION
+        if (TrackingService.serviceInstance != null) {
+            TrackingService.toggleSimulationDirectly()
+        } else {
+            val intent = Intent(context, TrackingService::class.java).apply {
+                action = TrackingService.ACTION_TOGGLE_SIMULATION
+            }
+            ContextCompat.startForegroundService(context, intent)
         }
-        context.startService(intent)
     }
 
     fun finishAndSaveRun(context: Context, onSaved: () -> Unit) {
