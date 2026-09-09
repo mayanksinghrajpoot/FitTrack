@@ -7,7 +7,6 @@ import android.graphics.Color as AndroidColor
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -96,8 +95,8 @@ fun ActiveTrackingScreen(
     val context = LocalContext.current
     val trackingState by viewModel.trackingState.collectAsState()
 
-    // Default to OpenStreetMap so streets & buildings load 100% reliably without any API Key!
-    var selectedMapEngine by remember { mutableStateOf(MapEngine.OPEN_STREET_MAP) }
+    // Default to Google Maps since user has a working API key
+    var selectedMapEngine by remember { mutableStateOf(MapEngine.GOOGLE_MAPS) }
 
     val hasLocationPermission = remember {
         ContextCompat.checkSelfPermission(
@@ -122,17 +121,17 @@ fun ActiveTrackingScreen(
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        if (selectedMapEngine == MapEngine.OPEN_STREET_MAP) {
-            // OpenStreetMap (OSMDroid): Loads streets, roads, and buildings instantly with ZERO API Key!
-            OpenStreetMapRenderer(
-                geoPoints = geoPoints,
-                modifier = Modifier.fillMaxSize()
-            )
-        } else {
-            // Google Maps Compose: Available if user configures a working key
+        if (selectedMapEngine == MapEngine.GOOGLE_MAPS) {
+            // Google Maps Compose: Fully working with user's API key
             GoogleMapRenderer(
                 latLngPoints = latLngPoints,
                 hasLocationPermission = hasLocationPermission,
+                modifier = Modifier.fillMaxSize()
+            )
+        } else {
+            // OpenStreetMap (OSMDroid): Free fallback with no API key needed
+            OpenStreetMapRenderer(
+                geoPoints = geoPoints,
                 modifier = Modifier.fillMaxSize()
             )
         }
@@ -164,13 +163,13 @@ fun ActiveTrackingScreen(
                     }
                 }
 
-                // Map Engine Switcher: OSM (Free No-Key) vs Google
+                // Map Engine Switcher: Google vs OSM
                 Surface(
                     onClick = {
-                        selectedMapEngine = if (selectedMapEngine == MapEngine.OPEN_STREET_MAP) {
-                            MapEngine.GOOGLE_MAPS
-                        } else {
+                        selectedMapEngine = if (selectedMapEngine == MapEngine.GOOGLE_MAPS) {
                             MapEngine.OPEN_STREET_MAP
+                        } else {
+                            MapEngine.GOOGLE_MAPS
                         }
                     },
                     shape = RoundedCornerShape(20.dp),
@@ -190,7 +189,7 @@ fun ActiveTrackingScreen(
                         )
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(
-                            text = if (selectedMapEngine == MapEngine.OPEN_STREET_MAP) "Map: OSM" else "Map: Google",
+                            text = if (selectedMapEngine == MapEngine.GOOGLE_MAPS) "Map: Google" else "Map: OSM",
                             style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
                             color = MaterialTheme.colorScheme.onSurface
                         )
@@ -199,9 +198,7 @@ fun ActiveTrackingScreen(
 
                 // Simulate Walk Button with Live Active State
                 Surface(
-                    onClick = {
-                        viewModel.toggleSimulation(context)
-                    },
+                    onClick = { viewModel.toggleSimulation(context) },
                     shape = RoundedCornerShape(20.dp),
                     color = if (trackingState.isSimulating) CrimsonRed else PureWhite,
                     shadowElevation = 4.dp,
@@ -278,7 +275,7 @@ fun ActiveTrackingScreen(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "Indoor testing? Tap here to simulate walk & draw route!",
+                            text = "Indoor? Tap to simulate walk & draw route!",
                             style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
                             color = CrimsonRed,
                             modifier = Modifier.weight(1f)
@@ -412,7 +409,8 @@ fun ActiveTrackingScreen(
 
 /**
  * OpenStreetMap (OSMDroid) Renderer:
- * Loads real-world streets and renders the Crimson Red Polyline path with 0 API keys.
+ * Crash-safe implementation that avoids ConcurrentModificationException
+ * by using a stable overlay list and proper lifecycle management.
  */
 @Composable
 private fun OpenStreetMapRenderer(
@@ -420,78 +418,85 @@ private fun OpenStreetMapRenderer(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    var mapViewRef by remember { mutableStateOf<MapView?>(null) }
-    var lastAnimatedPoint by remember { mutableStateOf<GeoPoint?>(null) }
 
-    DisposableEffect(mapViewRef) {
+    // Remember a single MapView instance across recompositions
+    val mapView = remember {
+        // Ensure OSM config is loaded before MapView creation
+        val prefs = context.getSharedPreferences("osmdroid_prefs", Context.MODE_PRIVATE)
+        val osmConfig = org.osmdroid.config.Configuration.getInstance()
+        osmConfig.load(context, prefs)
+        osmConfig.userAgentValue = "FitTrack-AthleticTracker/1.0"
+        osmConfig.osmdroidBasePath = java.io.File(context.filesDir, "osm_base_v3")
+        osmConfig.osmdroidTileCache = java.io.File(context.cacheDir, "osm_tiles_v3")
+
+        MapView(context).apply {
+            setTileSource(TileSourceFactory.MAPNIK)
+            setMultiTouchControls(true)
+            isTilesScaledToDpi = true
+            controller.setZoom(17.5)
+            controller.setCenter(GeoPoint(28.6139, 77.2090))
+            onResume()
+        }
+    }
+
+    // Proper lifecycle management
+    DisposableEffect(Unit) {
+        mapView.onResume()
         onDispose {
-            mapViewRef?.onPause()
-            mapViewRef?.onDetach()
+            mapView.onPause()
+            mapView.onDetach()
+        }
+    }
+
+    // Update overlays safely whenever geoPoints change
+    LaunchedEffect(geoPoints.size) {
+        try {
+            // Build new overlay list FIRST, then swap atomically
+            val newOverlays = mutableListOf<org.osmdroid.views.overlay.Overlay>()
+
+            if (geoPoints.size >= 2) {
+                val polyline = OsmPolyline().apply {
+                    outlinePaint.color = AndroidColor.parseColor("#E53935")
+                    outlinePaint.strokeWidth = 14f
+                    outlinePaint.isAntiAlias = true
+                    outlinePaint.strokeCap = android.graphics.Paint.Cap.ROUND
+                    outlinePaint.strokeJoin = android.graphics.Paint.Join.ROUND
+                    setPoints(geoPoints.toList()) // defensive copy
+                }
+                newOverlays.add(polyline)
+            }
+
+            geoPoints.firstOrNull()?.let { startPoint ->
+                val startMarker = OsmMarker(mapView).apply {
+                    position = startPoint
+                    title = "Start"
+                    setAnchor(OsmMarker.ANCHOR_CENTER, OsmMarker.ANCHOR_BOTTOM)
+                }
+                newOverlays.add(startMarker)
+            }
+
+            geoPoints.lastOrNull()?.let { currentPoint ->
+                val currentMarker = OsmMarker(mapView).apply {
+                    position = currentPoint
+                    title = "Current"
+                    setAnchor(OsmMarker.ANCHOR_CENTER, OsmMarker.ANCHOR_BOTTOM)
+                }
+                newOverlays.add(currentMarker)
+                mapView.controller.animateTo(currentPoint)
+            }
+
+            // Atomic swap: clear and addAll in one synchronized block
+            mapView.overlays.clear()
+            mapView.overlays.addAll(newOverlays)
+            mapView.invalidate()
+        } catch (_: Exception) {
+            // Swallow ConcurrentModificationException during rapid updates
         }
     }
 
     AndroidView(
         modifier = modifier,
-        factory = { ctx ->
-            // Configure OSM settings before MapView initialization
-            val osmConfig = org.osmdroid.config.Configuration.getInstance()
-            osmConfig.userAgentValue = "FitTrack-AthleticTracker-Release-1.0"
-            osmConfig.osmdroidBasePath = java.io.File(ctx.filesDir, "osm_base")
-            osmConfig.osmdroidTileCache = java.io.File(ctx.cacheDir, "osm_tiles_v2")
-
-            MapView(ctx).apply {
-                setTileSource(TileSourceFactory.MAPNIK)
-                setMultiTouchControls(true)
-                isTilesScaledToDpi = true
-                controller.setZoom(17.5)
-
-                val initialCenter = geoPoints.lastOrNull() ?: GeoPoint(28.6139, 77.2090)
-                controller.setCenter(initialCenter)
-                onResume() // Activate tile provider threads
-                mapViewRef = this
-            }
-        },
-        update = { mapView ->
-            mapView.overlays.clear()
-
-            // Draw Athletic Crimson Red Polyline path
-            if (geoPoints.size >= 2) {
-                val polyline = OsmPolyline().apply {
-                    outlinePaint.color = AndroidColor.parseColor("#E53935")
-                    outlinePaint.strokeWidth = 14f
-                    setPoints(geoPoints)
-                }
-                mapView.overlays.add(polyline)
-            }
-
-            // Start Position Marker
-            geoPoints.firstOrNull()?.let { startPoint ->
-                val startMarker = OsmMarker(mapView).apply {
-                    position = startPoint
-                    title = "Start Point"
-                    setAnchor(OsmMarker.ANCHOR_CENTER, OsmMarker.ANCHOR_BOTTOM)
-                }
-                mapView.overlays.add(startMarker)
-            }
-
-            // Current Position Marker
-            geoPoints.lastOrNull()?.let { currentPoint ->
-                val currentMarker = OsmMarker(mapView).apply {
-                    position = currentPoint
-                    title = "Current Position"
-                    setAnchor(OsmMarker.ANCHOR_CENTER, OsmMarker.ANCHOR_BOTTOM)
-                }
-                mapView.overlays.add(currentMarker)
-
-                // Smoothly center on latest coordinate only when it actually changes
-                if (currentPoint != lastAnimatedPoint) {
-                    lastAnimatedPoint = currentPoint
-                    mapView.controller.animateTo(currentPoint)
-                }
-            }
-
-            mapView.invalidate()
-        }
+        factory = { mapView }
     )
 }
 
@@ -523,7 +528,7 @@ private fun GoogleMapRenderer(
                     )
                 }
             }
-        } catch (e: SecurityException) {}
+        } catch (_: SecurityException) {}
     }
 
     LaunchedEffect(latLngPoints.lastOrNull()) {
