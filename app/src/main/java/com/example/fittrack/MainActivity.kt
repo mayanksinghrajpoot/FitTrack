@@ -68,11 +68,16 @@ fun MainNavigation(
     val navController = rememberNavController()
     val context = LocalContext.current
 
+    var shouldNavigateToTracking by remember { mutableStateOf(false) }
+
     var hasPermissions by remember {
         val fineLocationGranted = ContextCompat.checkSelfPermission(
             context, Manifest.permission.ACCESS_FINE_LOCATION
         ) == PackageManager.PERMISSION_GRANTED
-        mutableStateOf(fineLocationGranted)
+        val coarseLocationGranted = ContextCompat.checkSelfPermission(
+            context, Manifest.permission.ACCESS_COARSE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED
+        mutableStateOf(fineLocationGranted || coarseLocationGranted)
     }
 
     val permissionsLauncher = rememberLauncherForActivityResult(
@@ -81,6 +86,10 @@ fun MainNavigation(
         val fineGranted = permissions[Manifest.permission.ACCESS_FINE_LOCATION] ?: false
         val coarseGranted = permissions[Manifest.permission.ACCESS_COARSE_LOCATION] ?: false
         hasPermissions = fineGranted || coarseGranted
+        if (hasPermissions && shouldNavigateToTracking) {
+            shouldNavigateToTracking = false
+            navController.navigate("active_tracking")
+        }
     }
 
     LaunchedEffect(Unit) {
@@ -102,6 +111,7 @@ fun MainNavigation(
                     if (hasPermissions) {
                         navController.navigate("active_tracking")
                     } else {
+                        shouldNavigateToTracking = true
                         val permissionsToRequest = mutableListOf(
                             Manifest.permission.ACCESS_FINE_LOCATION,
                             Manifest.permission.ACCESS_COARSE_LOCATION

@@ -25,6 +25,9 @@ data class HomeUiState(
  */
 class HomeViewModel(private val repository: RunRepository) : ViewModel() {
 
+    val trackingState: StateFlow<com.example.fittrack.domain.model.TrackingState> =
+        com.example.fittrack.service.TrackingService.trackingState
+
     val uiState: StateFlow<HomeUiState> = combine(
         repository.totalDistanceMeters,
         repository.totalDurationMillis,

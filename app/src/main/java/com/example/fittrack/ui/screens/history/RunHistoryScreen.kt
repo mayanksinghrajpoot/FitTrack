@@ -36,6 +36,14 @@ import com.example.fittrack.ui.components.RunItemCard
 import com.example.fittrack.ui.theme.CrimsonRed
 import com.example.fittrack.ui.theme.PureWhite
 
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import com.example.fittrack.data.local.RunEntity
+import com.example.fittrack.ui.components.RunDetailDialog
+
 /**
  * Screen demonstrating LazyColumn (Compose's modern, performant RecyclerView).
  * Renders all historical workouts stored in the Room SQLite database.
@@ -47,6 +55,8 @@ fun RunHistoryScreen(
     onBackClick: () -> Unit
 ) {
     val runs by viewModel.runs.collectAsState()
+    var runToDelete by remember { mutableStateOf<RunEntity?>(null) }
+    var selectedRunForDetail by remember { mutableStateOf<RunEntity?>(null) }
 
     Scaffold(
         topBar = {
@@ -132,10 +142,58 @@ fun RunHistoryScreen(
                 ) { run ->
                     RunItemCard(
                         run = run,
-                        onDeleteClick = { viewModel.deleteRun(it) }
+                        onClick = { selectedRunForDetail = run },
+                        onDeleteClick = { runToDelete = it }
                     )
                 }
             }
+        }
+
+        selectedRunForDetail?.let { run ->
+            RunDetailDialog(
+                run = run,
+                onDismiss = { selectedRunForDetail = null }
+            )
+        }
+
+        runToDelete?.let { run ->
+            AlertDialog(
+                onDismissRequest = { runToDelete = null },
+                title = {
+                    Text(
+                        text = "Delete Run Record?",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                    )
+                },
+                text = {
+                    Text(
+                        text = "Are you sure you want to delete this recorded run? This action cannot be undone.",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            viewModel.deleteRun(run)
+                            runToDelete = null
+                        }
+                    ) {
+                        Text(
+                            text = "Delete",
+                            color = CrimsonRed,
+                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
+                        )
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { runToDelete = null }) {
+                        Text(
+                            text = "Cancel",
+                            style = MaterialTheme.typography.labelLarge
+                        )
+                    }
+                }
+            )
         }
     }
 }

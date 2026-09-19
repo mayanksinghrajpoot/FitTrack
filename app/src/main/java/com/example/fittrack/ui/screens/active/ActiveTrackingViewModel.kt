@@ -49,8 +49,8 @@ class ActiveTrackingViewModel(private val repository: RunRepository) : ViewModel
     fun finishAndSaveRun(context: Context, onSaved: () -> Unit) {
         val currentState = trackingState.value
 
-        // Save if any movement or duration recorded
-        if (currentState.durationMillis > 2000L || currentState.distanceMeters > 2f) {
+        // Save if meaningful movement or duration recorded (at least 5m or 5s)
+        if (currentState.distanceMeters >= 5f || currentState.durationMillis >= 5000L) {
             val runEntity = RunEntity(
                 timestamp = System.currentTimeMillis(),
                 durationMillis = currentState.durationMillis,

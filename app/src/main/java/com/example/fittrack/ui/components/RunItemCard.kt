@@ -41,22 +41,28 @@ import com.example.fittrack.ui.theme.CrimsonRed
 import com.example.fittrack.ui.theme.CrimsonRedLight
 import com.example.fittrack.ui.theme.PureWhite
 
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Map
+
 /**
  * Item layout for LazyColumn (Jetpack Compose's modern, performant RecyclerView).
- * Renders individual RunEntity records with route stats and delete action.
+ * Renders individual RunEntity records with route stats, track view action, and delete action.
  */
 @Composable
 fun RunItemCard(
     modifier: Modifier = Modifier,
     run: RunEntity,
+    onClick: (() -> Unit)? = null,
     onDeleteClick: (RunEntity) -> Unit
 ) {
     val distanceKm = run.distanceMeters / 1000f
-    val formattedDistance = String.format("%.2f", distanceKm)
+    val formattedDistance = String.format(java.util.Locale.getDefault(), "%.2f", distanceKm)
     val formattedDuration = TimeUtils.formatDuration(run.durationMillis)
     val formattedDate = TimeUtils.formatDate(run.timestamp)
 
     Card(
+        onClick = { onClick?.invoke() },
+        enabled = onClick != null,
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = PureWhite),
@@ -106,16 +112,28 @@ fun RunItemCard(
                     }
                 }
 
-                IconButton(
-                    onClick = { onDeleteClick(run) },
-                    modifier = Modifier.size(32.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.DeleteOutline,
-                        contentDescription = "Delete Run",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                        modifier = Modifier.size(20.dp)
-                    )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(
+                        onClick = { onDeleteClick(run) },
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.DeleteOutline,
+                            contentDescription = "Delete Run",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+
+                    if (onClick != null) {
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Icon(
+                            imageVector = Icons.Default.ChevronRight,
+                            contentDescription = "View Details",
+                            tint = CrimsonRed,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
                 }
             }
 

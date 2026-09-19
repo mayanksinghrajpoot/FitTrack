@@ -40,4 +40,21 @@ object TimeUtils {
         val sdf = SimpleDateFormat("dd MMM yyyy, hh:mm a", Locale.getDefault())
         return sdf.format(Date(timestamp))
     }
+
+    /**
+     * Formats timestamp into time string like "07:30 AM"
+     */
+    fun formatTime(timestamp: Long): String {
+        val sdf = SimpleDateFormat("hh:mm a", Locale.getDefault())
+        return sdf.format(Date(timestamp))
+    }
+
+    /**
+     * Formats start timestamp & duration into time range string like "07:30 AM – 07:48 AM"
+     */
+    fun formatTimeRange(startTimestamp: Long, durationMillis: Long): String {
+        val startTime = formatTime(startTimestamp)
+        val endTime = formatTime(startTimestamp + durationMillis)
+        return "$startTime – $endTime"
+    }
 }

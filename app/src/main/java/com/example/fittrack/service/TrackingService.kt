@@ -107,6 +107,8 @@ class TrackingService : Service() {
     }
 
     private fun startForegroundServiceWithTracking() {
+        val wasSimulating = _trackingState.value.isSimulating
+
         _trackingState.update {
             it.copy(isTracking = true, isPaused = false)
         }
@@ -124,6 +126,10 @@ class TrackingService : Service() {
 
         startLocationUpdates()
         startTimer()
+
+        if (wasSimulating) {
+            startSimulationLoop()
+        }
     }
 
     private fun pauseTracking() {
@@ -138,7 +144,7 @@ class TrackingService : Service() {
     }
 
     private fun stopTrackingService() {
-        _trackingState.update { it.copy(isTracking = false, isPaused = false) }
+        _trackingState.update { it.copy(isTracking = false, isPaused = false, isSimulating = false) }
         stopLocationUpdates()
         timerJob?.cancel()
         simulationJob?.cancel()
@@ -166,7 +172,7 @@ class TrackingService : Service() {
 
                 if ((_trackingState.value.durationMillis / 1000L) % 3L == 0L) {
                     val state = _trackingState.value
-                    val distKm = String.format("%.2f km", state.distanceMeters / 1000f)
+                    val distKm = String.format(java.util.Locale.getDefault(), "%.2f km", state.distanceMeters / 1000f)
                     val timeStr = TimeUtils.formatDuration(state.durationMillis)
                     val content = "$distKm  |  $timeStr  |  ${state.caloriesBurned} kcal"
                     notificationManager.notify(NOTIFICATION_ID, buildNotification(content))
@@ -181,28 +187,32 @@ class TrackingService : Service() {
         try {
             fusedLocationClient.lastLocation.addOnSuccessListener { location ->
                 if (location != null && _trackingState.value.locationPoints.isEmpty()) {
-                    appendLocationPoint(
-                        LocationPoint(
-                            latitude = location.latitude,
-                            longitude = location.longitude,
-                            altitude = location.altitude,
-                            timestamp = location.time
-                        ),
-                        speedKmh = location.speed * 3.6f
-                    )
+                    if (!location.hasAccuracy() || location.accuracy <= 50f) {
+                        appendLocationPoint(
+                            LocationPoint(
+                                latitude = location.latitude,
+                                longitude = location.longitude,
+                                altitude = location.altitude,
+                                timestamp = location.time
+                            ),
+                            speedKmh = location.speed * 3.6f
+                        )
+                    }
                 } else if (location == null && _trackingState.value.locationPoints.isEmpty()) {
                     fusedLocationClient.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null)
                         .addOnSuccessListener { curLoc ->
                             if (curLoc != null && _trackingState.value.locationPoints.isEmpty()) {
-                                appendLocationPoint(
-                                    LocationPoint(
-                                        latitude = curLoc.latitude,
-                                        longitude = curLoc.longitude,
-                                        altitude = curLoc.altitude,
-                                        timestamp = curLoc.time
-                                    ),
-                                    speedKmh = curLoc.speed * 3.6f
-                                )
+                                if (!curLoc.hasAccuracy() || curLoc.accuracy <= 50f) {
+                                    appendLocationPoint(
+                                        LocationPoint(
+                                            latitude = curLoc.latitude,
+                                            longitude = curLoc.longitude,
+                                            altitude = curLoc.altitude,
+                                            timestamp = curLoc.time
+                                        ),
+                                        speedKmh = curLoc.speed * 3.6f
+                                    )
+                                }
                             }
                         }
                 }
@@ -243,15 +253,18 @@ class TrackingService : Service() {
                 if (!_trackingState.value.isTracking || _trackingState.value.isPaused) return
 
                 result.locations.forEach { location ->
-                    appendLocationPoint(
-                        LocationPoint(
-                            latitude = location.latitude,
-                            longitude = location.longitude,
-                            altitude = location.altitude,
-                            timestamp = location.time
-                        ),
-                        speedKmh = location.speed * 3.6f
-                    )
+                    // Filter out noisy/imprecise GPS fixes (> 30m accuracy)
+                    if (!location.hasAccuracy() || location.accuracy <= 30f) {
+                        appendLocationPoint(
+                            LocationPoint(
+                                latitude = location.latitude,
+                                longitude = location.longitude,
+                                altitude = location.altitude,
+                                timestamp = location.time
+                            ),
+                            speedKmh = location.speed * 3.6f
+                        )
+                    }
                 }
             }
         }
@@ -262,6 +275,12 @@ class TrackingService : Service() {
      */
     private fun appendLocationPoint(newPoint: LocationPoint, speedKmh: Float) {
         _trackingState.update { current ->
+            val lastPoint = current.locationPoints.lastOrNull()
+            // Ignore duplicate points if lat & lng are identical
+            if (lastPoint != null && lastPoint.latitude == newPoint.latitude && lastPoint.longitude == newPoint.longitude) {
+                return@update current
+            }
+
             val updatedList = current.locationPoints + newPoint
             val totalDistance = LocationUtils.calculateTotalDistance(updatedList)
             val avgPace = LocationUtils.calculateAveragePace(current.durationMillis, totalDistance)
@@ -292,7 +311,10 @@ class TrackingService : Service() {
         }
 
         _trackingState.update { it.copy(isSimulating = true) }
+        startSimulationLoop()
+    }
 
+    private fun startSimulationLoop() {
         var currentLat = _trackingState.value.locationPoints.lastOrNull()?.latitude ?: 28.6139
         var currentLng = _trackingState.value.locationPoints.lastOrNull()?.longitude ?: 77.2090
 

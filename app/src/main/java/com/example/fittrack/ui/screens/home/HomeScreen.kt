@@ -55,6 +55,15 @@ import com.example.fittrack.ui.theme.CrimsonRed
 import com.example.fittrack.ui.theme.CrimsonRedDark
 import com.example.fittrack.ui.theme.PureWhite
 
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import com.example.fittrack.data.local.RunEntity
+
+import com.example.fittrack.ui.components.RunDetailDialog
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
@@ -63,6 +72,10 @@ fun HomeScreen(
     onViewAllHistoryClick: () -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val trackingState by viewModel.trackingState.collectAsState()
+
+    var runToDelete by remember { mutableStateOf<RunEntity?>(null) }
+    var selectedRunForDetail by remember { mutableStateOf<RunEntity?>(null) }
 
     Scaffold(
         topBar = {
@@ -116,7 +129,7 @@ fun HomeScreen(
                 LifetimeStatsBanner(uiState = uiState)
             }
 
-            // Bold "START RUN" CTA Button
+            // Bold "START RUN" or "RESUME ACTIVE RUN" CTA Button
             item {
                 Button(
                     onClick = onStartRunClick,
@@ -124,7 +137,9 @@ fun HomeScreen(
                         .fillMaxWidth()
                         .height(58.dp),
                     shape = RoundedCornerShape(16.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = CrimsonRed),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = CrimsonRed
+                    ),
                     elevation = ButtonDefaults.buttonElevation(defaultElevation = 4.dp)
                 ) {
                     Row(
@@ -139,7 +154,7 @@ fun HomeScreen(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "START NEW RUN",
+                            text = if (trackingState.isTracking) "RESUME ACTIVE RUN" else "START NEW RUN",
                             style = MaterialTheme.typography.titleMedium.copy(
                                 fontWeight = FontWeight.Black,
                                 letterSpacing = 0.5.sp
@@ -195,10 +210,58 @@ fun HomeScreen(
                 ) { run ->
                     RunItemCard(
                         run = run,
-                        onDeleteClick = { viewModel.deleteRun(it) }
+                        onClick = { selectedRunForDetail = run },
+                        onDeleteClick = { runToDelete = it }
                     )
                 }
             }
+        }
+
+        selectedRunForDetail?.let { run ->
+            RunDetailDialog(
+                run = run,
+                onDismiss = { selectedRunForDetail = null }
+            )
+        }
+
+        runToDelete?.let { run ->
+            AlertDialog(
+                onDismissRequest = { runToDelete = null },
+                title = {
+                    Text(
+                        text = "Delete Run Record?",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                    )
+                },
+                text = {
+                    Text(
+                        text = "Are you sure you want to delete this recorded run? This action cannot be undone.",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            viewModel.deleteRun(run)
+                            runToDelete = null
+                        }
+                    ) {
+                        Text(
+                            text = "Delete",
+                            color = CrimsonRed,
+                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
+                        )
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { runToDelete = null }) {
+                        Text(
+                            text = "Cancel",
+                            style = MaterialTheme.typography.labelLarge
+                        )
+                    }
+                }
+            )
         }
     }
 }

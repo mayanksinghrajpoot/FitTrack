@@ -47,4 +47,31 @@ object LocationUtils {
         // Standard rule of thumb: ~60-70 kcal per kilometer for average runner
         return (distanceKm * 65f).toInt()
     }
+
+    /**
+     * Queries all active system location providers (GPS, Network, Passive) to return the best last known location.
+     */
+    @android.annotation.SuppressLint("MissingPermission")
+    fun getBestLastKnownLocation(context: android.content.Context): LocationPoint? {
+        val locationManager = context.getSystemService(android.content.Context.LOCATION_SERVICE) as? android.location.LocationManager ?: return null
+        try {
+            val providers = locationManager.getProviders(true)
+            var bestLocation: Location? = null
+            for (provider in providers) {
+                val l = locationManager.getLastKnownLocation(provider) ?: continue
+                if (bestLocation == null || l.time > bestLocation.time) {
+                    bestLocation = l
+                }
+            }
+            if (bestLocation != null) {
+                return LocationPoint(
+                    latitude = bestLocation.latitude,
+                    longitude = bestLocation.longitude,
+                    altitude = bestLocation.altitude,
+                    timestamp = bestLocation.time
+                )
+            }
+        } catch (_: SecurityException) {}
+        return null
+    }
 }

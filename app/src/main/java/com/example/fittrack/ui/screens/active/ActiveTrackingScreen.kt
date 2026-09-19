@@ -1,7 +1,6 @@
 package com.example.fittrack.ui.screens.active
 
 import android.Manifest
-import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.Color as AndroidColor
 import androidx.compose.animation.AnimatedVisibility
@@ -82,6 +81,10 @@ import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.Marker as OsmMarker
 import org.osmdroid.views.overlay.Polyline as OsmPolyline
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
+
 enum class MapEngine {
     OPEN_STREET_MAP,
     GOOGLE_MAPS
@@ -96,14 +99,25 @@ fun ActiveTrackingScreen(
     val context = LocalContext.current
     val trackingState by viewModel.trackingState.collectAsState()
 
-    // Default to Google Maps since user has a working API key
-    var selectedMapEngine by remember { mutableStateOf(MapEngine.GOOGLE_MAPS) }
+    var showDiscardDialog by remember { mutableStateOf(false) }
+
+    // Default to OpenStreetMap so maps work 100% out-of-the-box on all Android devices without an API key
+    var selectedMapEngine by remember { mutableStateOf(MapEngine.OPEN_STREET_MAP) }
 
     val hasLocationPermission = remember {
         ContextCompat.checkSelfPermission(
             context,
             Manifest.permission.ACCESS_FINE_LOCATION
         ) == PackageManager.PERMISSION_GRANTED
+    }
+
+    // Handle system back gesture
+    BackHandler(enabled = trackingState.isTracking) {
+        if (trackingState.distanceMeters >= 5f || trackingState.durationMillis >= 5000L) {
+            showDiscardDialog = true
+        } else {
+            viewModel.discardRun(context, onCloseClick)
+        }
     }
 
     // Start tracking when screen launches if not already running
@@ -155,7 +169,13 @@ fun ActiveTrackingScreen(
                     shadowElevation = 4.dp,
                     border = BorderStroke(1.dp, CardBorderColor)
                 ) {
-                    IconButton(onClick = { viewModel.discardRun(context, onCloseClick) }) {
+                    IconButton(onClick = {
+                        if (trackingState.distanceMeters >= 5f || trackingState.durationMillis >= 5000L) {
+                            showDiscardDialog = true
+                        } else {
+                            viewModel.discardRun(context, onCloseClick)
+                        }
+                    }) {
                         Icon(
                             imageVector = Icons.Default.Close,
                             contentDescription = "Discard Run",
@@ -311,7 +331,7 @@ fun ActiveTrackingScreen(
                 )
                 Row(verticalAlignment = Alignment.Bottom) {
                     Text(
-                        text = String.format("%.2f", trackingState.distanceMeters / 1000f),
+                        text = String.format(java.util.Locale.getDefault(), "%.2f", trackingState.distanceMeters / 1000f),
                         style = MaterialTheme.typography.displayLarge.copy(
                             fontSize = 46.sp,
                             fontWeight = FontWeight.Black
@@ -405,13 +425,53 @@ fun ActiveTrackingScreen(
                 }
             }
         }
+
+        if (showDiscardDialog) {
+            AlertDialog(
+                onDismissRequest = { showDiscardDialog = false },
+                title = {
+                    Text(
+                        text = "Discard Workout?",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                    )
+                },
+                text = {
+                    Text(
+                        text = "Are you sure you want to discard this workout? The recorded path and statistics will not be saved.",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            showDiscardDialog = false
+                            viewModel.discardRun(context, onCloseClick)
+                        }
+                    ) {
+                        Text(
+                            text = "Discard",
+                            color = CrimsonRed,
+                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
+                        )
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showDiscardDialog = false }) {
+                        Text(
+                            text = "Keep Recording",
+                            style = MaterialTheme.typography.labelLarge
+                        )
+                    }
+                }
+            )
+        }
     }
 }
 
 /**
  * OpenStreetMap (OSMDroid) Renderer:
- * Uses Carto CDN tiles instead of tile.openstreetmap.org (which blocks com.example.* apps).
- * Carto Voyager tiles are free, fast, and render beautiful street-level detail.
+ * Uses Wikimedia Maps (Full detailed OpenStreetMap city maps featuring building footprints,
+ * street names, house numbers, parks, terrain, transit lines, and zero watermarks).
  */
 @Composable
 private fun OpenStreetMapRenderer(
@@ -420,17 +480,12 @@ private fun OpenStreetMapRenderer(
 ) {
     val context = LocalContext.current
 
-    // Carto Voyager tile source: free CDN with no User-Agent blocking
-    val cartoTileSource = remember {
+    // Wikimedia Maps high-resolution detailed city tile source
+    val cityMapTileSource = remember {
         object : OnlineTileSourceBase(
-            "CartoDB_Voyager",
-            0, 20, 256, ".png",
-            arrayOf(
-                "https://a.basemaps.cartocdn.com/rastertiles/voyager/",
-                "https://b.basemaps.cartocdn.com/rastertiles/voyager/",
-                "https://c.basemaps.cartocdn.com/rastertiles/voyager/",
-                "https://d.basemaps.cartocdn.com/rastertiles/voyager/"
-            )
+            "WikimediaCityMap",
+            0, 19, 256, ".png",
+            arrayOf("https://maps.wikimedia.org/osm-intl/")
         ) {
             override fun getTileURLString(pMapTileIndex: Long): String {
                 val zoom = MapTileIndex.getZoom(pMapTileIndex)
@@ -441,30 +496,23 @@ private fun OpenStreetMapRenderer(
         }
     }
 
+    val initialCenter = remember {
+        val best = com.example.fittrack.domain.util.LocationUtils.getBestLastKnownLocation(context)
+        if (best != null) {
+            GeoPoint(best.latitude, best.longitude)
+        } else {
+            geoPoints.lastOrNull() ?: GeoPoint(37.4220, -122.0841)
+        }
+    }
+
     // Remember a single MapView instance across recompositions
     val mapView = remember {
-        // Configure OSMDroid before MapView creation
-        val prefs = context.getSharedPreferences("osmdroid_prefs", Context.MODE_PRIVATE)
-        val osmConfig = org.osmdroid.config.Configuration.getInstance()
-        osmConfig.load(context, prefs)
-        osmConfig.userAgentValue = "FitTrack-AthleticTracker/1.0"
-
-        // Use a fresh tile cache to avoid stale 403 tiles from previous tile servers
-        val tileCache = java.io.File(context.cacheDir, "carto_tiles_v1")
-        osmConfig.osmdroidBasePath = java.io.File(context.filesDir, "osm_base_v4")
-        osmConfig.osmdroidTileCache = tileCache
-
-        // Delete old blocked tile caches from previous versions
-        listOf("osm_tiles_v2", "osm_tiles_v3").forEach { oldDir ->
-            java.io.File(context.cacheDir, oldDir).deleteRecursively()
-        }
-
         MapView(context).apply {
-            setTileSource(cartoTileSource)
+            setTileSource(cityMapTileSource)
             setMultiTouchControls(true)
             isTilesScaledToDpi = true
             controller.setZoom(17.5)
-            controller.setCenter(GeoPoint(28.6139, 77.2090))
+            controller.setCenter(initialCenter)
             onResume()
         }
     }
@@ -479,7 +527,7 @@ private fun OpenStreetMapRenderer(
     }
 
     // Update overlays safely whenever geoPoints change
-    LaunchedEffect(geoPoints.size) {
+    LaunchedEffect(geoPoints) {
         try {
             val newOverlays = mutableListOf<org.osmdroid.views.overlay.Overlay>()
 

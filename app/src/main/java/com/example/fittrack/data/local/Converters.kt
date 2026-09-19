@@ -10,6 +10,7 @@ import com.google.gson.reflect.TypeToken
  */
 class Converters {
     private val gson = Gson()
+    private val locationListType = object : TypeToken<List<LocationPoint>>() {}.type
 
     @TypeConverter
     fun fromLocationPointsList(points: List<LocationPoint>?): String {
@@ -20,9 +21,8 @@ class Converters {
     @TypeConverter
     fun toLocationPointsList(json: String?): List<LocationPoint> {
         if (json.isNullOrEmpty()) return emptyList()
-        val listType = object : TypeToken<List<LocationPoint>>() {}.type
         return try {
-            gson.fromJson(json, listType) ?: emptyList()
+            gson.fromJson(json, locationListType) ?: emptyList()
         } catch (e: Exception) {
             emptyList()
         }
